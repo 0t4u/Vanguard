@@ -58,11 +58,11 @@ export class WebsocketProxy extends Legacy {
     private destroyed: boolean;
     constructor(client: Client, vanguardOptions: VanguardOptions = {}) {
         super(client);
+        this.workerOptions = this.createWorkerOptions(vanguardOptions.workerOptions);
         this.manager = new Updated(this.createSharderOptions(vanguardOptions.sharderOptions));
         this.shards = new Collection();
-        this.workerOptions = this.createWorkerOptions(vanguardOptions.workerOptions);
-        this.disableBeforeReadyPacketQueue = vanguardOptions.disableBeforeReadyPacketQueue ?? false;
         this.identifyManager = undefined;
+        this.disableBeforeReadyPacketQueue = vanguardOptions.disableBeforeReadyPacketQueue ?? false;
         this.eventsAttached = false;
         this.destroyed = false;
         // @ts-expect-error: delete-able props
@@ -78,6 +78,7 @@ export class WebsocketProxy extends Legacy {
             intents: this.client.options.intents.bitfield as unknown as number,
             rest: this.client.rest,
             initialPresence: this.client.options.presence || null as GatewayPresenceUpdateData|null,
+            buildStrategy: (manager: Updated) => new VanguardWorkerShardingStrategy(this, manager, this.workerOptions),
             largeThreshold,
             version,
             compression
@@ -126,6 +127,10 @@ export class WebsocketProxy extends Legacy {
             this.emit(packet.data.t, packet.data.d, packet.shardId);
             shard.onDispatch(packet.data);
         });
+        this.manager.on(WebSocketShardEvents.Error, data => {
+            const shard = this.ensureShard(data.shardId);
+            shard.onError(data.error);
+        });
         this.manager.on(WebSocketShardEvents.Debug, data => this.client.emit(ClientEvents.Debug, `[WS => Shard ${data.shardId} => Worker] ${data.message}`));
         this.eventsAttached = true;
     }
@@ -150,8 +155,6 @@ export class WebsocketProxy extends Legacy {
             this.debug(`[Info] Spawn settings\n        Shards: [ ${this.manager.options.shardIds.join(', ')} ]\n        Shard Count: ${this.manager.options.shardIds.length}\n        Total Shards: ${this.client.options.shardCount}`);
         }
         this.attachEventsToWebsocketManager();
-        const strategy = new VanguardWorkerShardingStrategy(this, this.manager, this.workerOptions);
-        this.manager.setStrategy(strategy);
         this.debug(`[Info] Using Vanguard worker shading strategy\n        Workers: ${this.workerOptions.shardsPerWorker}\n        File Dir: ${this.workerOptions.workerPath}\n        Using custom identify throttling: ${!!this.identifyManager}`);
         for (const shardId of this.manager.options.shardIds) this.ensureShard(shardId);
         await this.manager.connect();
